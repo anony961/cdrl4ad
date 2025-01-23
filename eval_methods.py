@@ -4,18 +4,15 @@ import pickle
 import pandas as pd
 import torch
 from spot import SPOT, dSPOT
+from sklearn.metrics import ndcg_score, roc_auc_score
 
 from args import get_parser
 parser = get_parser()
 args = parser.parse_args()
 
-def adjust_predicts(score, label, threshold, pred=None, calc_latency=False):
-    global ano_sc, lla, thre
-    ano_sc = score
-    lla = label
-    thre = threshold
+def adjust_predicts(score, label, threshold, dataset, pred=None, calc_latency=False):
 
-    if (label is None) | (args.adjust == True):
+    if label is None:
         predict = score > threshold
         return predict, None
 
@@ -54,9 +51,6 @@ def adjust_predicts(score, label, threshold, pred=None, calc_latency=False):
 
 
 def calc_point2point(predict, actual):
-
-    global preds, acts
-
     preds = predict
     acts = actual
     TP = np.sum(predict * actual)
@@ -66,7 +60,8 @@ def calc_point2point(predict, actual):
     precision = TP / (TP + FP + 0.00001)
     recall = TP / (TP + FN + 0.00001)
     f1 = 2 * precision * recall / (precision + recall + 0.00001)
-    return f1, precision, recall, TP, TN, FP, FN
+    roc_auc = roc_auc_score(actual, predict)
+    return f1, precision, recall, TP, TN, FP, FN, roc_auc
 
 
 def pot_eval(init_score, score, label, q=1e-3, level=0.99, dynamic=False):
@@ -91,6 +86,7 @@ def pot_eval(init_score, score, label, q=1e-3, level=0.99, dynamic=False):
             "TN": p_t[4],
             "FP": p_t[5],
             "FN": p_t[6],
+            'ROC/AUC': p_t[7],
             "threshold": pot_th,
             "latency": p_latency,
         }
@@ -100,7 +96,7 @@ def pot_eval(init_score, score, label, q=1e-3, level=0.99, dynamic=False):
         }
 
 
-def bf_search(score, label, start, end=None, step_num=1, display_freq=1, verbose=True):
+def bf_search(score, label, dataset, start, end=None, step_num=1, display_freq=1, verbose=True):
 
     print(f"Finding best f1-score by searching for threshold..")
     if step_num is None or end is None:
@@ -114,7 +110,7 @@ def bf_search(score, label, start, end=None, step_num=1, display_freq=1, verbose
     m_l = 0
     for i in range(search_step):
         threshold += search_range / float(search_step)
-        target, latency = calc_seq(score, label, threshold)
+        target, latency = calc_seq(score, label, threshold, dataset)
         if target[0] > m[0]:
             m_t = threshold
             m = target
@@ -130,13 +126,14 @@ def bf_search(score, label, start, end=None, step_num=1, display_freq=1, verbose
         "TN": int(m[4]),
         "FP": int(m[5]),
         "FN": int(m[6]),
+        'ROC/AUC': m[7],
         "threshold": m_t,
         "latency": m_l,
     }
 
 
-def calc_seq(score, label, threshold):
-    predict, latency = adjust_predicts(score, label, threshold, calc_latency=True)
+def calc_seq(score, label, threshold, dataset):
+    predict, latency = adjust_predicts(score, label, threshold, dataset, calc_latency=True)
     return calc_point2point(predict, label), latency
 
 
@@ -156,6 +153,7 @@ def epsilon_eval(train_scores, test_scores, test_labels, reg_level=1):
             "TN": p_t[4],
             "FP": p_t[5],
             "FN": p_t[6],
+            'ROC/AUC': p_t[7],
             "threshold": best_epsilon,
             "latency": p_latency,
             "reg_level": reg_level,
@@ -214,48 +212,35 @@ def find_epsilon(errors, reg_level=1):
     print('best_epsilon in : ', best_epsilon.shape)
     return best_epsilon
 
+def hit_att(ascore, labels, ps = [100, 150]):
+    res = {}
+    for p in ps:
+        hit_score = []
+        for i in range(ascore.shape[0]):
+            a, l = ascore[i], labels[i]
+            a, l = np.argsort(a).tolist()[::-1], set(np.where(l == 1)[0])
+            if l:
+                size = round(p * len(l) / 100)
+                a_p = set(a[:size])
+                intersect = a_p.intersection(l)
+                hit = len(intersect) / len(l)
+                hit_score.append(hit)
+        res[f'Hit@{p}%'] = np.mean(hit_score)
+    return res
 
-def rca(path, group):
-    with open(f'{path}/test_output.pkl', 'rb') as f:
-        x = pickle.load(f)
-    b = []
-    for i in range(38):
-        a = x[f"A_Score_{i}"]
-        b.append(list(a))
-
-    b = torch.tensor(b)
-    root_causes, root_cause_index = torch.topk(b.permute(1, 0), 38)
-
-    root_cause_label = pd.read_csv(f'/data/SMD/interpretation_label/machine-{group}.txt', header=None, delimiter='\t')
-
-    root_cause_label[['section', 'root cause']] = root_cause_label[0].str.split(':', 1, expand=True)
-    root_cause_label.drop(0, axis=1, inplace=True)
-
-    root_cause_index = root_cause_index[100+1:-1]
-
-    hitrate_100 = get_hitrate(x, root_cause_index, root_cause_label, 1)
-    hitrate_150 = get_hitrate(x, root_cause_index, root_cause_label, 1.5)
-
-    return {
-        "group": group,
-        "hitrate_100": hitrate_100,
-        "hitrate_150": hitrate_150,
-    }
-
-def get_hitrate(x, root_cause_index, root_cause_label, ratio):
-    hit = []
-    gt_count = []
-    for x in range(root_cause_label.shape[0]):
-        temp = []
-        for i in range(int(root_cause_label.iloc[x, 0].split('-')[0]), int(root_cause_label.iloc[x, 0].split('-')[1])+1):
-            gt = list(map(int, root_cause_label.iloc[x, 1].split(',')))
-            gt_num = len(gt)
-
-            candidates = root_cause_index[i, :round(gt_num * ratio)]
-            count_matching_values = len(np.intersect1d(np.array(gt), np.array(candidates)))
-
-            temp.append(count_matching_values/ gt_num)
-        gt_count.append(gt_num)
-        hit.append(np.mean(temp))
-
-    return np.mean(hit)
+def ndcg(ascore, labels, ps = [100, 150]):
+    res = {}
+    for p in ps:
+        ndcg_scores = []
+        for i in range(ascore.shape[0]):
+            a, l = ascore[i], labels[i]
+            labs = list(np.where(l == 1)[0])
+            if labs:
+                k_p = round(p * len(labs) / 100)
+                try:
+                    hit = ndcg_score(l.reshape(1, -1), a.reshape(1, -1), k = k_p)
+                except Exception as e:
+                    return {}
+                ndcg_scores.append(hit)
+        res[f'NDCG@{p}%'] = np.mean(ndcg_scores)
+    return res

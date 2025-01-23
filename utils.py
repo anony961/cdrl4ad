@@ -21,40 +21,18 @@ def normalize_data(data, scaler=None):
         scaler = MinMaxScaler()
         scaler.fit(data)
     data = scaler.transform(data)
-    print("Data normalized")
 
     return data, scaler
 
-
-def get_data_dim(dataset):
-    """
-    :param dataset: Name of dataset
-    :return: Number of dimensions in data
-    """
-    if dataset == "SMAP":
-        return 25
-    elif dataset == "MSL":
-        return 55
-    elif str(dataset).startswith("machine"):
-        return 38
-    else:
-        raise ValueError("unknown dataset " + str(dataset))
-
-
-def get_target_dims(dataset):
-    """
-    :param dataset: Name of dataset
-    :return: index of data dimension that should be modeled (forecasted and reconstructed),
-                     returns None if all input dimensions should be modeled
-    """
-    if dataset == "SMAP":
-        return [0]
-    elif dataset == "MSL":
-        return [0]
-    elif dataset == "SMD":
-        return None
-    else:
-        raise ValueError("unknown dataset " + str(dataset))
+def z_score_standardization(data):
+    data = np.asarray(data, dtype=np.float32)
+    if np.any(sum(np.isnan(data))):
+        data = np.nan_to_num(data)
+    mean = np.mean(data)  
+    std = np.std(data)    
+    
+    standardized_data = (data - mean) / std
+    return standardized_data
 
 class SlidingWindowDataset(Dataset):
     def __init__(self, data, window, target_dim=None, horizon=1):
@@ -71,123 +49,103 @@ class SlidingWindowDataset(Dataset):
         return len(self.data) - self.window
 
 def normalize_anomaly_scores(scores):
-    """
-    Method for normalizing anomaly scores
-    :param scores: anomaly_scores
-    """
+
     normalized_scores = (scores - np.min(scores)) / (np.max(scores) - np.min(scores))
     return normalized_scores
 
-def get_cosine_sim(node_features):
-    feature_num = node_features.shape[1]
-    cos_ji_mat = []
-    node_i_features = node_features.repeat_interleave(node_features.sahpe, dim=1)
-    print('node_i_features: ', node_i_features.shape)
-    node_j_features = node_features.repeat(1, feature_num, 1)
-    print('node_j_features: ', node_j_features.shape)
-
-    for i in range(feature_num):
-        cos_ji = F.cosine_similarity(node_i_features[:, i:i+feature_num], node_j_features[:, i:i+feature_num], dim=2)
-
-        if i == 0:
-            cos_ji_mat.append(cos_ji)
-            cos_ji_mat = torch.cat(cos_ji_mat)
+def merge_pkl_files(file_list, directory):
+    data_list = np.array([])
+    for file in file_list:
+        file_path = os.path.join(directory, file)
+        with open(file_path, "rb") as f:
+            data = pickle.load(f)
+                   
+        if data_list.size == 0:
+            data_list = np.array(data)
         else:
-            cos_ji_mat = torch.hstack((cos_ji_mat, cos_ji))
+            data_list = np.concatenate((data_list, np.array(data)), axis=0)
+            
+    return data_list
 
-    cos_ji_mat = cos_ji_mat.view(cos_ji_mat.shape[0], feature_num, feature_num)
-
-    diag = torch.diagonal(cos_ji_mat, dim1=1, dim2=2)
-    print(diag)
-
-    cos_ji_mat = cos_ji_mat - torch.diag_embed(diag)
-    # print("cos_ji_mat: ", cos_ji_mat.shape)
-    return cos_ji_mat
-
-def get_edge_weights(cos_ji_mat):
-    # select top k number of nodes with cosine similarity -> each node i have top k number of edges
-    edge_weights = torch.topk(cos_ji_mat, args.topk, dim=-1).values  # cosine similarity values between node i and j of the edge
-    topk_indices_ji = torch.topk(cos_ji_mat, args.topk, dim=-1).indices
-
-def createLoader(data, node_features, targets, batch_size, train_val_split):
-    node_features = node_features[1:-1]
-    targets = targets[1:-1]
-    node_feat = node_features
-    targ = targets
-
-    if train_val_split == True:
-        # train, val, test ratio -> 7.2 : 0.8 : 2
-        val_split = 0.1
-
-        # shuffle dataset except test dataset
-        dataset_size = int(len(targets))
-        indices = list(range(dataset_size))
-
-        split = int(np.floor(val_split * dataset_size))
-        np.random.shuffle(indices)
-        train_indices, val_indices = indices[split:dataset_size], indices[:split]
-        # print('indices: ', len(train_indices), len(val_indices))
-
-        # separate node_features, edge_indices, edge_features, and targets into train, val, test
-        train_n_features = node_features[train_indices]
-        val_n_features = node_features[val_indices]
-        train_targets = targets[train_indices]
-        val_targets = targets[val_indices]
-
-        train_batches = torch.hstack((torch.tensor(np.arange(0, train_n_features.shape[0] // batch_size)).repeat_interleave(batch_size).view(1, -1), torch.tensor(train_n_features.shape[0] // batch_size).repeat(train_n_features.shape[0] % batch_size).view(1, -1))).view(-1)
-        val_batches = torch.hstack((torch.tensor(np.arange(0, val_n_features.shape[0] // batch_size)).repeat_interleave(batch_size).view(1, -1), torch.tensor(val_n_features.shape[0] // batch_size).repeat(val_n_features.shape[0] % batch_size).view(1, -1))).view(-1)
-
-        train_loader = torch.utils.data.DataLoader(train_n_features, batch_size=batch_size)# , shuffle=shuffle)
-        val_loader = torch.utils.data.DataLoader(val_n_features, batch_size=batch_size)#, shuffle=shuffle)
-
-        global train_node_features, val_node_features, train_target
-        train_target = train_targets
-
-        train_node_features = train_n_features
-        val_node_features = val_n_features
-        return train_loader, val_loader, train_targets, val_targets
-
-    else:
-        global test_node_features
-        test_node_features = node_features
-        
-        test_batches = torch.hstack((torch.tensor(np.arange(0, node_features.shape[0] // batch_size)).repeat_interleave(batch_size).view(1, -1), torch.tensor(node_features.shape[0] // batch_size).repeat(node_features.shape[0] % batch_size).view(1, -1))).view(-1)
-        test_loader = DynamicGraphTemporalSignalBatch(features=node_features, targets=targets, batches=test_batches) #, causes=test_causes)
-
-        return test_loader, targets
 
 def get_data(path, dataset, batch_size, max_train_size=None, max_test_size=None,
-             normalize=False, spec_res=False, train_start=0, test_start=0):
-    """
-    Get data from pkl files
+             normalize=False, spec_res=False, train_start=0, test_start=0, group=None):
 
-    return shape: (([train_size, x_dim], [train_size] or None), ([test_size, x_dim], [test_size]))
-    Method from OmniAnomaly (https://github.com/NetManAIOps/OmniAnomaly)
-    """
+    root_cause_labels = None
     if dataset == "SMD":
 
-        x_dim = 38
-        f = open(os.path.join(path + "_train.pkl"), "rb")
-        train_data = pickle.load(f).reshape((-1, x_dim)) #[train_start:train_end, :]
-        f.close()
-        try:
-            f = open(os.path.join(path + "_test.pkl"), "rb")
-            test_data = pickle.load(f).reshape((-1, x_dim)) #[test_start:test_end, :]
-            f.close()
-        except (KeyError, FileNotFoundError):
-            test_data = None
-        try:
-            f = open(os.path.join(path + "_test_label.pkl"), "rb")
-            test_label = pickle.load(f).reshape((-1)) #[test_start:test_end]
-            f.close()
-        except (KeyError, FileNotFoundError):
-            test_label = None
+        files = os.listdir(path)
+        grouped_files = {"train": [], "test": [], "labels": []}
+        for file in files:
+            if group != None:
+                if group not in file:
+                    continue
+            if "train" in file:
+                grouped_files["train"].append(file)
+            elif "test" in file:
+                grouped_files["test"].append(file)
+            elif "labels" in file:
+                grouped_files["labels"].append(file)
 
-    elif dataset in ["SWaT", "WADI", "PSM", "SMAP", "MSL"]:
-        train_data = pd.read_csv(path+f"/downsampled_{dataset}_train.csv", index_col=0)
-        test_data = pd.read_csv(path+f"/downsampled_{dataset}_test.csv", index_col=0)
-        # print(train_data, train_data.shape)
-        # print(test_data, test_data.shape)
+        merged_data = {}
+        for kind, files in grouped_files.items():
+            merged_data[kind] = merge_pkl_files(files, path)
+        train_data = merged_data['train']
+        test_data = merged_data['test']
+        test_label = merged_data['labels']
+        print(f"{dataset}, {train_data.shape}")
+        print(f"{dataset}, {test_data.shape}")
+
+        root_cause_labels = np.zeros(test_data.shape)
+        files = os.listdir(os.path.join(path, 'interpretation_label'))
+        for filename in files:
+            if group != None:
+                if group not in filename:
+                    continue
+            with open(os.path.join(path, 'interpretation_label', filename), "r") as f:
+                ls = f.readlines()
+            for line in ls:
+                pos, values = line.split(':')[0], line.split(':')[1].split(',')
+                start, end, indx = int(pos.split('-')[0]), int(pos.split('-')[1]), [int(i)-1 for i in values]
+                root_cause_labels[start-1:end-1, indx] = 1
+
+    elif dataset in ["SWaT", "WADI", "PSM", 'creditcard', 'GECCO', 'HAI']:
+        if dataset != 'PSM':
+            train_data = pd.read_csv(path+f"/downsampled_{dataset}_train.csv", index_col=0)
+            test_data = pd.read_csv(path+f"/downsampled_{dataset}_test.csv", index_col=0)
+            print(f"{dataset}, {train_data.shape}")
+            print(f"{dataset}, {test_data.shape}")
+            train, test = train_data, test_data
+        else:
+            train_data = pd.read_csv(path+f"/train.csv", index_col=0)
+            test_data = pd.read_csv(path+f"/test.csv", index_col=0)
+            print(f"{dataset}, {train_data.shape}")
+            print(f"{dataset}, {test_data.shape}")
+            train, test = train_data, test_data
+            train = train.fillna(train.mean())
+            test = test.fillna(test.mean())
+        
+        test_label = test_data.iloc[:, -1]
+        test_data = test_data.iloc[:, :-1]
+        test_data.columns = [''] * len(test_data.columns)
+
+    elif dataset in ['SMAP', 'MSL']:
+        train_data = pd.read_csv(path+f"/{dataset}_train.csv", index_col=0)
+        test_data = pd.read_csv(path+f"/{dataset}_test.csv", index_col=0)
+
+        print(f"{dataset}, {train_data.shape}")
+        print(f"{dataset}, {test_data.shape}")
+        
+        test_label = test_data.iloc[:, -1]
+        test_data = test_data.iloc[:, :-1]
+        test_data.columns = [''] * len(test_data.columns)
+
+    elif dataset=='JumpStarter':
+        train_data = pd.read_csv(path+f"/service_train.csv", index_col=0)
+        test_data = pd.read_csv(path+f"/service_test.csv", index_col=0)
+
+        print(f"{dataset}, {train_data.shape}")
+        print(f"{dataset}, {test_data.shape}")
         
         test_label = test_data.iloc[:, -1]
         test_data = test_data.iloc[:, :-1]
@@ -207,7 +165,7 @@ def get_data(path, dataset, batch_size, max_train_size=None, max_test_size=None,
         train_data, scaler = normalize_data(train_data, scaler=None)
         test_data, _ = normalize_data(test_data, scaler=scaler)
 
-    return (train_data, None), (test_data, test_label)
+    return (train_data, None), (test_data, test_label), root_cause_labels
 
 class SlidingWindowDataset(Dataset):
     def __init__(self, data, window, target_dim=None, horizon=1):
@@ -312,26 +270,45 @@ def get_y_height(y):
         return max(y) + 0.1
 
 
-def adjust_anomaly_scores(scores, lookback):
-    # Create a copy of the 'scores' array to store adjusted scores
+def adjust_anomaly_scores(scores, dataset, is_train, lookback):
+    """
+    Method for MSL and SMAP where channels have been concatenated as part of the preprocessing
+    :param scores: anomaly_scores
+    :param dataset: name of dataset
+    :param is_train: if scores is from train set
+    :param lookback: lookback (window size) used in model
+    """
+
+    if dataset.upper() not in ['SMAP', 'MSL']:
+        return scores
+
     adjusted_scores = scores.copy()
+    if is_train:
+        md = pd.read_csv(f'/datasets/{dataset}/{dataset.lower()}_train_md.csv')
+    else:
+        md = pd.read_csv(f'/datasets/{dataset}/labeled_anomalies.csv')
+        md = md[md['spacecraft'] == dataset.upper()]
 
-    # Get the number of time steps and the number of channels
-    num_time_steps, num_channels = adjusted_scores.shape
+    md = md[md['chan_id'] != 'P-2']
 
-    # Iterate through each channel
-    for channel in range(num_channels):
-        # Iterate through time steps starting from 'lookback'
-        for t in range(lookback, num_time_steps):
-            # Check if any of the past 'lookback' time steps had non-zero score for this channel
-            if np.any(adjusted_scores[t - lookback:t, channel]):
-                # If any past score was non-zero, set the current score to 0
-                adjusted_scores[t, channel] = 0
+    md = md.sort_values(by=['chan_id'])
 
-        # Normalize the scores of the current channel to a range [0, 1]
-        min_val = np.min(adjusted_scores[:, channel])
-        max_val = np.max(adjusted_scores[:, channel])
-        adjusted_scores[:, channel] = (adjusted_scores[:, channel] - min_val) / (max_val - min_val)
+    sep_cuma = np.cumsum(md['num_values'].values) - lookback
+    sep_cuma = sep_cuma[:-1]
+    buffer = np.arange(1, 20)
+    i_remov = np.sort(np.concatenate((sep_cuma, np.array([i+buffer for i in sep_cuma]).flatten(),
+                                      np.array([i-buffer for i in sep_cuma]).flatten())))
+    i_remov = i_remov[(i_remov < len(adjusted_scores)) & (i_remov >= 0)]
+    i_remov = np.sort(np.unique(i_remov))
+    if len(i_remov) != 0:
+        adjusted_scores[i_remov] = 0
 
-    # Return the adjusted scores array
+    sep_cuma = np.cumsum(md['num_values'].values) - lookback
+    s = [0] + sep_cuma.tolist()
+    for c_start, c_end in [(s[i], s[i+1]) for i in range(len(s)-1)]:
+        e_s = adjusted_scores[c_start: c_end+1]
+
+        e_s = (e_s - np.min(e_s))/(np.max(e_s) - np.min(e_s))
+        adjusted_scores[c_start: c_end+1] = e_s
+
     return adjusted_scores

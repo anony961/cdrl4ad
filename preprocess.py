@@ -22,8 +22,8 @@ def load_data(dataset):
     """ Method from OmniAnomaly (https://github.com/NetManAIOps/OmniAnomaly) """
 
     if dataset == "SMD":
-        dataset_folder = "/raid/dsl/SMD/dataset"
-        output_folder = "/raid/dsl/SMD"
+        dataset_folder = "/datasets/SMD/dataset"
+        output_folder = "/datasets/SMD"
         makedirs(output_folder, exist_ok=True)
         file_list = listdir(path.join(dataset_folder, "train"))
         print(file_list)
@@ -52,8 +52,8 @@ def load_data(dataset):
                 )
 
     elif dataset == "SMAP" or dataset == "MSL":
-        dataset_folder = "datasets/data"
-        output_folder = "datasets/data/processed"
+        dataset_folder = "datasets/SMAP_MSL"
+        output_folder = "datasets/SMAP_MSL/processed"
         makedirs(output_folder, exist_ok=True)
         with open(path.join(dataset_folder, "labeled_anomalies.csv"), "r") as file:
             csv_reader = reader(file, delimiter=",")

@@ -23,6 +23,7 @@ class CDRL4AD(nn.Module):
         out_dim,
         device,
         embed_dim=64,
+        causal_thres=0.1,
         gru_n_layers=1,
         gru_hid_dim=150,
         forecast_n_layers=1,
@@ -38,7 +39,7 @@ class CDRL4AD(nn.Module):
         self.topk = topk
         self.feature_gat = FeatureAttentionLayer(n_features, topk, window_size, dropout, alpha, embed_dim)
         self.temporal_gat = TemporalAttentionLayer(n_features, window_size, dropout, alpha, embed_dim)
-        self.causal_gat = CausalAttentionLayer(n_features, cause_window_size, dropout, alpha, causal_hid_dim, device)
+        self.causal_gat = CausalAttentionLayer(n_features, cause_window_size, dropout, alpha, causal_thres, causal_hid_dim, device)
         self.feat_lin = nn.Linear(topk, 1)
         self.gru = GRULayer(2 * window_size + embed_dim + causal_hid_dim, gru_hid_dim, gru_n_layers, dropout) # (4 * window_size + topk + 1)
         self.forecasting_model = Forecasting_Model(n_features, gru_hid_dim, forecast_hid_dim, out_dim, forecast_n_layers, dropout)
@@ -48,7 +49,6 @@ class CDRL4AD(nn.Module):
         self.device = device
 
     def forward(self, x, y): 
-
         all_embeddings = self.embedding(torch.arange(self.n_features).to(self.device))
 
         weights_arr = all_embeddings.detach().clone()

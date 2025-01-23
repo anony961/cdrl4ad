@@ -23,21 +23,21 @@ class FeatureAttentionLayer(nn.Module):
         nn.init.xavier_uniform_(self.a.data, gain=1.414)
 
         if self.use_bias:
-            self.bias_n = nn.Parameter(torch.empty(n_features, topk)) 
+            self.bias_n = nn.Parameter(torch.empty(n_features, topk))
             self.bias_e = nn.Parameter(torch.empty(n_features, topk))
 
         self.leakyrelu = nn.LeakyReLU(alpha)
 
     def forward(self, x_n, x_e, edge_indices, all_embeddings):
-        Wx_n = self.lin_n(x_n)                                                      
+        Wx_n = self.lin_n(x_n)                                                     
 
-        a_input_n = self._make_node_attention_input(Wx_n, edge_indices)          
+        a_input_n = self._make_node_attention_input(Wx_n, edge_indices)            
 
         x_e = x_e.repeat(x_n.shape[0], 1).view(x_n.shape[0], self.n_features, self.topk, 1)
-        Wx_e = self.lin_e(x_e)                                                      
+        Wx_e = self.lin_e(x_e)                                              
         a_input_e = self._make_edge_attention_input(Wx_n, Wx_e, edge_indices)            
 
-        e_n = self.leakyrelu(torch.matmul(a_input_n, self.a)).squeeze(3)      
+        e_n = self.leakyrelu(torch.matmul(a_input_n, self.a)).squeeze(3)     
         e_e = self.leakyrelu(torch.matmul(a_input_e, self.a)).squeeze(3)     
 
         if self.use_bias:
@@ -103,40 +103,39 @@ class TemporalAttentionLayer(nn.Module):
         self.relu = nn.ReLU()
 
     def forward(self, x, edge_features):
-
-        x = x.permute(0, 2, 1)     
+        x = x.permute(0, 2, 1)  
 
         Wx = self.lin(x)                                                  
         a_input = self._make_attention_input(Wx)                         
         e = self.leakyrelu(torch.matmul(a_input, self.a)).squeeze(3)   
 
         if self.use_bias:
-            e += torch.nan_to_num(self.bias)  
+            e += torch.nan_to_num(self.bias) 
 
-        attention = torch.softmax(e, dim=2)   
+        attention = torch.softmax(e, dim=2)  
         attention = torch.dropout(attention, self.dropout, train=self.training)
 
-        h = self.relu(torch.matmul(attention, x))    
+        h = self.relu(torch.matmul(attention, x)) 
         return h.permute(0, 2, 1)
 
     def _make_attention_input(self, v):
 
         K = self.num_nodes
-        blocks_repeating = v.repeat_interleave(K, dim=1) 
-        blocks_alternating = v.repeat(1, K, 1)  
+        blocks_repeating = v.repeat_interleave(K, dim=1)  
+        blocks_alternating = v.repeat(1, K, 1)
         combined = torch.cat((blocks_repeating, blocks_alternating), dim=2)
 
         return combined.view(v.size(0), K, K, 2 * self.embed_dim)
 
 class CausalAttentionLayer(nn.Module):
 
-    def __init__(self, n_features, causal_window_size, dropout, alpha, hid_dim, device, use_bias=True):
+    def __init__(self, n_features, window_size, dropout, alpha, causal_thres, hid_dim, device, use_bias=True):
         super(CausalAttentionLayer, self).__init__()
         self.n_features = n_features
-        self.window_size = causal_window_size
-        self.causal_window_size = causal_window_size
+        self.window_size = window_size
         self.dropout = dropout
-        self.embed_dim = causal_window_size 
+        self.embed_dim = window_size 
+        self.causal_thres = causal_thres
         self.num_nodes = n_features
         self.use_bias = use_bias
         self.hidden = hid_dim
@@ -144,27 +143,27 @@ class CausalAttentionLayer(nn.Module):
 
         a_input_dim = 2
 
-        self.lin = nn.Linear(causal_window_size, self.embed_dim)
+        self.lin = nn.Linear(window_size, self.embed_dim)
         self.a = nn.Parameter(torch.empty((a_input_dim, 1)))
         nn.init.xavier_uniform_(self.a.data, gain=1.414)
 
         if self.use_bias:
-            self.bias = nn.Parameter(torch.empty(n_features, causal_window_size*n_features))
+            self.bias = nn.Parameter(torch.empty(n_features, window_size*n_features))
 
         self.leakyrelu = nn.LeakyReLU(alpha)
 
-        self.gru_left = nn.GRU(causal_window_size, self.hidden, batch_first=True)
+        self.gru_left = nn.GRU(window_size, self.hidden, batch_first=True)
         self.gru_left.flatten_parameters()
 
         self.fc_mu = nn.Linear(self.hidden, self.hidden)
         self.fc_std = nn.Linear(self.hidden, self.hidden)
 
         self.networks = nn.ModuleList([
-            GRU(causal_window_size, self.hidden) for i in range(n_features)])
+            GRU(window_size, self.hidden) for i in range(n_features)])
 
     def forward(self, x, y):
 
-        x = x[:, :, -self.causal_window_size:] 
+        x = x[:, :, -self.window_size:] 
 
         Wx = self.lin(x)                                      
         a_input = self._make_attention_input(Wx, y)                        
@@ -177,7 +176,7 @@ class CausalAttentionLayer(nn.Module):
         attention = torch.softmax(e, dim=2)  
         attention = torch.dropout(attention, self.dropout, train=self.training)
 
-        A = (attention >= 0.4).int()
+        A = (attention >= self.causal_thres).int()
         Ax = A * a_input[:, :, :, 1].squeeze(2)
         cause_x = Wx + Ax.view(x.shape[0], self.n_features,  -1).sum(dim=2).unsqueeze(-1)
 
@@ -204,7 +203,6 @@ class CausalAttentionLayer(nn.Module):
         v = v.view(v.shape[0], -1)
 
         blocks_repeating = y.unsqueeze(-1).repeat_interleave(K * self.window_size, dim=2)
-
         blocks_alternating = v.repeat(1, 1, K).view(v.shape[0], K, K*self.window_size).unsqueeze(-1)  
         
         combined = torch.cat((blocks_repeating, blocks_alternating), dim=3)
@@ -218,6 +216,7 @@ class GRU(nn.Module):
         self.p = num_series
         self.hidden = hidden
 
+        # Set up network.
         self.gru = nn.GRU(num_series, hidden, batch_first=True)
         self.gru.flatten_parameters()
         self.linear = nn.Linear(hidden, 1)
@@ -226,10 +225,7 @@ class GRU(nn.Module):
     def init_hidden(self, batch):
         return torch.zeros(1, batch, self.hidden)
 
-
     def forward(self, X, z, mode = 'train'):
-
-        tau = 0
         if mode == 'train':
           X_right, hidden_out = self.gru(X, z)
           X_right = self.linear(X_right)

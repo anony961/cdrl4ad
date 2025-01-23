@@ -14,13 +14,13 @@ class Trainer:
         optimizer,
         window_size,
         n_features,
+        device,
         target_dims=None,
         n_epochs=5,
         batch_size=16,
         init_lr=0.001,
         forecast_criterion=nn.MSELoss(),
         recon_criterion=nn.MSELoss(),
-        use_cuda=True,
         dload="",
         log_dir="output/",
         print_every=1,
@@ -38,7 +38,7 @@ class Trainer:
         self.init_lr = init_lr
         self.forecast_criterion = forecast_criterion
         self.recon_criterion = recon_criterion
-        self.device = "cuda" if use_cuda and torch.cuda.is_available() else "cpu"
+        self.device = device
         self.dload = dload
         self.log_dir = log_dir
         self.print_every = print_every
@@ -54,8 +54,7 @@ class Trainer:
         }
         self.epoch_times = []
 
-        if self.device == "cuda":
-            self.model.cuda()
+        self.model.to(self.device)
 
         if self.log_tensorboard:
             self.writer = SummaryWriter(f"{log_dir}")
@@ -78,12 +77,8 @@ class Trainer:
             forecast_b_losses = []
             recon_b_losses = []
 
-            batch_count = 0
-            last_batch = 0
             x = []
             y = []
-            count = 0
-            last = 1
             for x, y in loader:
                 x = x.to(self.device)
                 y = y.to(self.device)
@@ -114,6 +109,9 @@ class Trainer:
             self.losses["train_forecast"].append(forecast_epoch_loss)
             self.losses["train_recon"].append(recon_epoch_loss)
             self.losses["train_total"].append(total_epoch_loss)
+            
+            epoch_time = time.time() - epoch_start
+            self.epoch_times.append(epoch_time)
 
             # Evaluate on validation set
             forecast_val_loss, recon_val_loss, total_val_loss = "NA", "NA", "NA"
@@ -128,9 +126,6 @@ class Trainer:
 
             if self.log_tensorboard:
                 self.write_loss(epoch)
-
-            epoch_time = time.time() - epoch_start
-            self.epoch_times.append(epoch_time)
 
             if epoch % self.print_every == 0:
                 s = (
@@ -147,7 +142,7 @@ class Trainer:
                         f"val_total_loss = {total_val_loss:.5f}"
                     )
 
-                s += f" [{epoch_time:.1f}s]"
+                s += f" [{epoch_time:.2f}s]"
                 print(s)
 
         if val_loader is None:

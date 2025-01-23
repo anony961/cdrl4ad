@@ -20,9 +20,9 @@ if __name__ == "__main__":
     dataset = args.dataset
     if args.model_id is None:
         if dataset == 'SMD':
-            dir_path = f"./output/{dataset}/{args.group}"
+            dir_path = f"output/{dataset}/{args.group}"
         else:
-            dir_path = f"./output/{dataset}"
+            dir_path = f"output/{dataset}"
         dir_content = os.listdir(dir_path)
         subfolders = [subf for subf in dir_content if os.path.isdir(f"{dir_path}/{subf}") and subf != "logs"]
         date_times = [datetime.datetime.strptime(subf, '%d%m%Y_%H%M%S') for subf in subfolders]
@@ -34,9 +34,9 @@ if __name__ == "__main__":
         model_id = args.model_id
 
     if dataset == "SMD":
-        model_path = f"./output/{dataset}/{args.group}/{model_id}"
+        model_path = f"output/{dataset}/{args.group}/{model_id}"
     elif dataset in ['MSL', 'SMAP']:
-        model_path = f"./output/{dataset}/{model_id}"
+        model_path = f"output/{dataset}/{model_id}"
     else:
         raise Exception(f'Dataset "{dataset}" not available.')
 
@@ -58,6 +58,7 @@ if __name__ == "__main__":
     elif args.dataset == "SMD" and args.group != model_args.group:
         print(f"Model trained on SMD group {model_args.group}, but asked to predict SMD group {args.group}.")
 
+    topk = model_args.topk
     window_size = model_args.lookback
     normalize = model_args.normalize
     n_epochs = model_args.epochs
@@ -102,6 +103,7 @@ if __name__ == "__main__":
         n_features,
         window_size,
         out_dim,
+        topk = model_args.topk, 
         kernel_size=model_args.kernel_size,
         use_gatv2=model_args.use_gatv2,
         feat_gat_embed_dim=model_args.feat_gat_embed_dim,
@@ -139,6 +141,7 @@ if __name__ == "__main__":
     reg_level = reg_level_dict[key]
 
     prediction_args = {
+        'topk':topk, # 추가
         'dataset': dataset,
         "target_dims": target_dims,
         'scale_scores': args.scale_scores,
@@ -151,6 +154,8 @@ if __name__ == "__main__":
         "save_path": f"{model_path}",
     }
 
+    print(prediction_args)
+    
     count = 0
     for filename in os.listdir(model_path):
         if filename.startswith("summary"):
