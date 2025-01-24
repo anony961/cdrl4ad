@@ -35,3 +35,25 @@ To train:
 ~~~
 python train.py --batch_size <batch size> --dataset <dataset> --epochs <epoch> --window_size <sliding window size> --embed_dim <embedding dimension> --topk <the value of top k>
 ~~~
+
+###  Configurations for Anomaly Detection Accuracy Comparison
+
+The anomaly detection performance of GNN-based models was evaluated using the following hyperparameter configurations:
+fusagnet
+- window size = 50
+- embedding dimension = 128
+
+mtad-gat
+- window size = 100
+- embedding dimension = 64
+
+GDN
+- window size = 20
+- embedding dimension = 64
+  
+DUOGAT
+- window size = 50
+- embedding dimension = 128
+
+These hyperparameter configurations of each model were selected based on the best performance achieved on the validation dataset.
+
