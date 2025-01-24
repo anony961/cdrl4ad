@@ -36,7 +36,8 @@ To train:
 python train.py --batch_size <batch size> --dataset <dataset> --epochs <epoch> --window_size <sliding window size> --embed_dim <embedding dimension> --topk <the value of top k>
 ~~~
 
-###  Configurations for Anomaly Detection Accuracy Comparison
+### ⚙️ Configurations for Anomaly Detection Accuracy Comparison
+---
 
 The anomaly detection performance of GNN-based models was evaluated using the following hyperparameter configurations:
 fusagnet
